@@ -1,0 +1,61 @@
+parameters:
+  - name: serviceName
+    type: string
+
+trigger: none
+
+stages:
+
+- stage: Validate
+  jobs:
+    - job: Test
+      pool:
+        vmImage: ubuntu-latest
+      steps:
+        - task: UsePythonVersion@0
+          inputs:
+            versionSpec: '3.11'
+
+        - script: |
+            pip install -r requirements.txt
+            pip install pytest flake8 black
+            flake8 .
+            black --check .
+            pytest
+          displayName: "Lint & Test"
+
+- stage: Build
+  dependsOn: Validate
+  jobs:
+    - job: BuildImage
+      pool:
+        vmImage: ubuntu-latest
+      steps:
+        - task: Docker@2
+          inputs:
+            containerRegistry: 'acr-service-connection'
+            repository: ${{ parameters.serviceName }}
+            command: 'buildAndPush'
+            Dockerfile: '**/Dockerfile'
+            tags: |
+              $(Build.BuildId)
+
+- stage: Deploy
+  dependsOn: Build
+  jobs:
+    - job: TerraformDeploy
+      pool:
+        vmImage: ubuntu-latest
+      steps:
+        - task: TerraformInstaller@1
+          inputs:
+            terraformVersion: latest
+
+        - script: |
+            cd platform-infra/environments/dev
+            terraform init
+            terraform apply -auto-approve \
+              -var="image_tag=$(Build.BuildId)" \
+              -var="acr_login_server=$(ACR_LOGIN_SERVER)"
+          displayName: "Terraform Apply"
+
